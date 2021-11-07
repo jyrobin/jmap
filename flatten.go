@@ -6,95 +6,69 @@ import (
 	"strings"
 )
 
-const MaxDepth = 15 // why go deeper
+// Note FlattenValue/UnflattenMap servce as the baseline implementation for Jmap reference
 
+type Config struct {
+	Depth     int
+	Separator string
+	IsMap     IsMap
+	Prefix    string
+}
+
+// FlattenMap create a flat map[string]interface{} from a given input string-keyed map v.
+// It uses IsMap to decide whether to recursive into a map's field value.
 // Note: no cloning whatsoever, only structural rewriting at topper levels, so use with care
-// - all nasty side-effecting and cycling
-// - if supplying flat, it can be partially modified
-func Flatten(v interface{}, depth int, sep string, flat map[string]interface{}) (map[string]interface{}, error) {
-	if flat == nil {
-		flat = make(map[string]interface{})
+// - potential nasty side-effecting and cycling
+// - the providing map can be partially modified
+func FlattenMap(v interface{}, cfg *Config, ret map[string]interface{}) (map[string]interface{}, error) {
+	if cfg == nil {
+		cfg = &Config{}
 	}
+	sep := cfg.Separator
 	if sep == "" {
 		sep = "."
 	}
-	if depth <= 0 {
+	depth := cfg.Depth
+	if depth <= 0 { // does not accept 0
 		depth = MaxDepth
 	}
-
-	var err error
-	if smap, ok := v.(map[string]interface{}); ok { // well let me optimize pre-maturally
-		err = flattenMap(smap, "", depth, sep, flat)
-	} else if isStrMap(v) {
-		err = flatten(v, "", depth, sep, flat)
-	} else {
-		err = fmt.Errorf("Not a string-keyed map")
+	isMap := cfg.IsMap
+	if isMap == nil {
+		isMap = IsMinMap // default minimal reflection
 	}
-	return flat, err
+	prefix := strings.TrimSpace(cfg.Prefix)
+
+	if ret == nil {
+		ret = make(map[string]interface{})
+	}
+
+	if !isMap(v) {
+		return ret, fmt.Errorf("Not a string-keyed map")
+	}
+
+	return ret, flattenMap(v, prefix, depth, sep, isMap, ret)
 }
 
-func isStrMap(v interface{}) bool {
-	t := reflect.TypeOf(v)
-	return t != nil && t.Kind() == reflect.Map && t.Key().Kind() == reflect.String
-}
-
-func flattenMap(smap map[string]interface{}, prefix string, depth int, sep string, flat map[string]interface{}) error {
-	if depth <= 0 {
-		flat[prefix] = smap // ok since prefix cannot be ""
-		return nil
-	}
-
-	if depth <= 0 || len(smap) == 0 {
-		flat[prefix] = smap
-		return nil
-	}
-
-	var err error
-	for k, v := range smap {
-		newKey := k
-		if prefix != "" {
-			newKey = prefix + sep + newKey
-		}
-		if sm, ok := v.(map[string]interface{}); ok {
-			err = flattenMap(sm, newKey, depth-1, sep, flat)
-		} else {
-			err = flatten(v, newKey, depth-1, sep, flat)
-		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func flatten(v interface{}, prefix string, depth int, sep string, flat map[string]interface{}) error {
-	if depth <= 0 || !isStrMap(v) {
-		flat[prefix] = v // ok since prefix cannot be ""
+func flattenMap(v interface{}, prefix string, depth int, sep string, isMap IsMap, ret map[string]interface{}) error {
+	if depth <= 0 || !isMap(v) {
+		ret[prefix] = v // ok since prefix cannot be ""
 		return nil
 	}
 
 	val := reflect.ValueOf(v)
-	keys := val.MapKeys()
+	keys := val.MapKeys() // should not panic due to isMap
 	if len(keys) == 0 {
-		flat[prefix] = v
+		ret[prefix] = v
 		return nil
 	}
 
 	for _, key := range keys {
 		if ch := val.MapIndex(key); ch.IsValid() {
-			newKey := key.Interface().(string)
+			newKey := key.Interface().(string) // should not panic due to isMap
 			if prefix != "" {
 				newKey = prefix + sep + newKey
 			}
-
-			var err error
-			chv := ch.Interface()
-			if sm, ok := chv.(map[string]interface{}); ok {
-				err = flattenMap(sm, newKey, depth-1, sep, flat)
-			} else {
-				err = flatten(chv, newKey, depth-1, sep, flat)
-			}
-			if err != nil {
+			if err := flattenMap(ch.Interface(), newKey, depth-1, sep, isMap, ret); err != nil {
 				return err
 			}
 		}
@@ -102,23 +76,32 @@ func flatten(v interface{}, prefix string, depth int, sep string, flat map[strin
 	return nil
 }
 
-// Assuming unflatten what's flattened above, meaning only map[string]interface{} counts
-// as children
-func Unflatten(flat map[string]interface{}, sep string) (map[string]interface{}, error) {
+// UnflattenMap turns a flattened map flat created by FlatternMap into a nested tree
+// where all "internal" nodes of flat are map[string]interface{}
+func UnflattenMap(flat map[string]interface{}, cfg *Config) (map[string]interface{}, error) {
+	ret := make(map[string]interface{})
 	if len(flat) == 0 {
-		return make(map[string]interface{}), nil
+		return ret, nil
 	}
 
+	if cfg == nil {
+		cfg = &Config{}
+	}
+	sep := cfg.Separator
 	if sep == "" {
 		sep = "."
 	}
-	return unflatten(flat, sep)
-}
-
-func unflatten(flat map[string]interface{}, sep string) (map[string]interface{}, error) {
-	ret := make(map[string]interface{})
+	prefix := strings.TrimSpace(cfg.Prefix)
+	plen := len(prefix)
 
 	for k, v := range flat {
+		if plen > 0 {
+			if len(k) <= plen || k[0:plen] != prefix {
+				continue
+			}
+			k = k[plen:]
+		}
+
 		keys := strings.Split(k, sep)
 		if n := len(keys); n > 0 {
 			smap := ret

@@ -27,7 +27,7 @@ func TestFlatten(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		ret, err := Flatten(tt.v1, 0, ".", nil)
+		ret, err := FlattenMap(tt.v1, nil, nil)
 		if tt.err {
 			if err == nil {
 				t.Fatalf("%+v should fail to flatten", tt.v1)
@@ -41,7 +41,7 @@ func TestFlatten(t *testing.T) {
 		}
 
 		if !tt.err {
-			ret, err = Unflatten(tt.v2, ".")
+			ret, err = UnflattenMap(tt.v2, nil)
 			if err != nil {
 				t.Fatalf("%+v should fail to unflatten", tt.v2)
 			} else if !reflect.DeepEqual(ret, tt.v1) {
