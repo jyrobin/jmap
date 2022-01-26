@@ -1,2 +1,3 @@
 # jmap
-Simple golang structure transformation
+
+Simple golang map utilities and structure transformation
